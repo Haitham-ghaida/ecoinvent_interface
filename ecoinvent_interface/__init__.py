@@ -9,6 +9,7 @@ __all__ = [
     "ReleaseType",
     "Settings",
     "get_excel_lcia_file_for_version",
+    'ImpactIndexMapper'
 ]
 
 __version__ = "3.0"
@@ -17,4 +18,4 @@ from .storage import CachedStorage
 from .settings import Settings, permanent_setting
 from .release import EcoinventRelease, ReleaseType, get_excel_lcia_file_for_version
 from .process_interface import EcoinventProcess, ProcessFileType
-from .mapping import ProcessMapping
+from .mapping import ProcessMapping, ImpactIndexMapper

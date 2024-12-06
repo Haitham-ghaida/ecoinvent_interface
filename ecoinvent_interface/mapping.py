@@ -121,3 +121,123 @@ class ProcessMapping:
                     archive.write(file_path, arcname=file_path.name)
 
         return DATA_DIR / "mappings.zip"
+
+
+from typing import Dict, List, Set
+import logging
+from collections import defaultdict
+
+class ImpactIndexMapper:
+    """Maps and explores ecoinvent impact assessment method indices"""
+    
+    def __init__(self, process):
+        """Initialize with an EcoinventProcess instance"""
+        self.process = process
+        self.found_indices = set()
+        self.method_groups = defaultdict(set)  # Method name -> set of indices
+        self.index_metadata = {}  # Index -> full metadata
+        
+    def explore_index(self, start_index: int) -> List[dict]:
+        """Explore a specific index and its related indices
+        
+        Args:
+            start_index: Index number to explore
+            
+        Returns:
+            List of impact results found
+        """
+        try:
+            results = self.process.get_impacts(str(start_index))
+            
+            # Make sure results is a list
+            if not isinstance(results, list):
+                logging.warning(f"Unexpected response type for index {start_index}: {type(results)}")
+                return []
+                
+            # Store results data
+            for result in results:
+                if not isinstance(result, dict):
+                    continue
+                    
+                index = result.get('index')
+                if index is None:
+                    continue
+                    
+                method_name = result.get('method_name')
+                if method_name:
+                    self.method_groups[method_name].add(index)
+                    
+                self.found_indices.add(index)
+                self.index_metadata[index] = {
+                    'method_name': result.get('method_name'),
+                    'category_name': result.get('category_name'),
+                    'indicator_name': result.get('indicator_name'),
+                    'unit_name': result.get('unit_name')
+                }
+            
+            return results
+            
+        except Exception as e:
+            logging.warning(f"Error exploring index {start_index}: {str(e)}")
+            return []
+            
+    def scan_range(self, start: int, end: int, step: int = 1) -> Dict[str, Set[int]]:
+        """Scan a range of indices to build method mapping
+        
+        Args:
+            start: Starting index
+            end: Ending index
+            step: Step size for scanning
+            
+        Returns:
+            Dict mapping method names to sets of indices
+        """
+        for i in range(start, end + 1, step):
+            self.explore_index(i)
+            
+        return dict(self.method_groups)  # Convert defaultdict to regular dict
+        
+    def get_index_info(self, index: int) -> dict:
+        """Get stored metadata for a specific index"""
+        return self.index_metadata.get(index)
+        
+    def list_methods(self) -> List[str]:
+        """Get list of all found method names"""
+        return list(self.method_groups.keys())
+        
+    def get_indices_for_method(self, method_name: str) -> Set[int]:
+        """Get all indices associated with a method name"""
+        return self.method_groups.get(method_name, set())
+        
+    def get_method_structure(self) -> Dict[str, Dict[str, List[dict]]]:
+        """Get hierarchical structure of methods and categories
+        
+        Returns:
+            Dict with structure:
+            {
+                method_name: {
+                    category_name: [
+                        {
+                            'index': index,
+                            'indicator': indicator_name,
+                            'unit': unit_name
+                        },
+                        ...
+                    ],
+                    ...
+                },
+                ...
+            }
+        """
+        structure = defaultdict(lambda: defaultdict(list))
+        
+        for index, meta in self.index_metadata.items():
+            method = meta['method_name']
+            category = meta['category_name']
+            structure[method][category].append({
+                'index': index,
+                'indicator': meta['indicator_name'],
+                'unit': meta['unit_name']
+            })
+            
+        return dict(structure)  # Convert to regular dict

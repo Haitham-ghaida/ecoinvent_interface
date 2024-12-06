@@ -149,38 +149,231 @@ class EcoinventProcess(InterfaceBase):
 
     @selected_process
     @fresh_login
-    def _json_request(self, url: str) -> Union[dict, list]:
+    def _json_request(
+        self, 
+        url: str, 
+        additional_params: Optional[dict] = None,
+        method: str = 'GET',
+        json_data: Optional[dict] = None
+    ) -> Union[dict, list]:
+        """Make a JSON request to the API.
+        
+        Args:
+            url: The API endpoint URL
+            additional_params: Additional query parameters (optional)
+            method: HTTP method ('GET' or 'POST')
+            json_data: JSON data for POST requests (optional)
+            
+        Returns:
+            Union[dict, list]: The JSON response from the API
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "ecoinvent-api-client-library": "ecoinvent_interface",
             "ecoinvent-api-client-library-version": __version__,
+            "Accept": "application/json",
+            "Content-Type": "application/json"
         }
         headers.update(self.custom_headers)
-        message = """Requesting URL.
-    URL: {url}
-    Class: {self.__class__.__name__}
-    Instance ID: {id(self)}
-    Version: {__version__}
-    User: {self.username}
+
+        message = f"""Requesting URL.
+        URL: {url}
+        Method: {method}
+        Class: {self.__class__.__name__}
+        Instance ID: {id(self)}
+        Version: {__version__}
+        User: {self.username}
         """
         logger.debug(message)
-        return requests.get(
-            url,
-            params={
+
+        # Only include these params for GET requests or if we're not doing a search
+        if method == 'GET' or 'search' not in url:
+            params = {
                 "dataset_id": self.dataset_id,
                 "version": self.version,
                 "system_model": self.system_model,
-            },
-            headers=headers,
-            timeout=20,
-        ).json()
+            }
+            if additional_params:
+                params.update(additional_params)
+        else:
+            params = additional_params or {}
 
+        if method == 'GET':
+            response = requests.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=20,
+            )
+        else:  # POST
+            response = requests.post(
+                url,
+                params=params,
+                headers=headers,
+                json=json_data,
+                timeout=20,
+            )
+
+        # Check for errors
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP Error: {str(e)}")
+            logger.error(f"Response content: {response.text}")
+            raise
+
+        try:
+            return response.json()
+        except ValueError as e:
+            logger.error(f"JSON decode error: {str(e)}")
+            logger.error(f"Response content: {response.text}")
+            raise
     def get_basic_info(self) -> dict:
         return self._json_request(self.urls["api"] + "spold")
-
+    @selected_process
     def get_documentation(self) -> dict:
         return self._json_request(self.urls["api"] + "spold/documentation")
+    @selected_process
+    def get_exchanges(self) -> dict:
+        return self._json_request(self.urls['api'] + 'spold/exchanges')
+    @selected_process
+    def get_methods(self):
+        return self._json_request(self.urls['api'] + 'spold/methods')
+    @selected_process
+    def get_related_datasets(self):
+        return self._json_request(self.urls['api'] + 'spold/related_datasets')
+    @selected_process
+    def get_consuming_activities(self):
+        return self._json_request(self.urls['api'] + 'spold/consuming_activities')
+    @selected_process
+    def get_lci(self):
+        return self._json_request(self.urls['api'] + 'spold/lci_results')
+    @selected_process
+    def get_direct_contributions(self, indicator_id: str) -> dict:
+        """Get direct contributions for a specific impact indicator.
+        
+        This method retrieves the direct contributions data for a specific impact assessment
+        indicator for the currently selected process.
+        
+        Args:
+            indicator_id: The unique identifier of the impact assessment indicator
+            
+        Returns:
+            dict: A dictionary containing the direct contributions data
+            
+        Raises:
+            MissingProcess: If no process is selected
+            requests.exceptions.RequestException: If the API request fails
+        """
+        return self._json_request(
+            self.urls['api'] + 'spold/direct_contributions',
+            additional_params={'indicator_id': indicator_id}
+        )
+    
+    
+    def get_impacts(self, method_id: str) -> dict:
+        """Get LCIA results for a specific impact assessment method.
+        
+        Args:
+            method_id: The ID of the impact assessment method
+            
+        Returns:
+            dict: The LCIA results for the specified method
+        """
+        return self._json_request(
+            self.urls['api'] + 'spold/lcia_results',
+            additional_params={'method_id': method_id}
+        )
+    @fresh_login  # Remove @selected_process as search doesn't need a selected process
+    def searcher(
+        self,
+        query: Optional[str] = None,
+        current_page: int = 1,
+        page_size: int = 5,
+        geography: Optional[list] = None,
+        isic_section: Optional[list] = None,
+        isic_class: Optional[list] = None,
+        activity_type: Optional[list] = None,
+        sector: Optional[list] = None,
+    ) -> dict:
+        """Search datasets for the current version and system model.
+        
+        Args:
+            query: Search term (optional)
+            current_page: Page number (default: 1)
+            page_size: Number of results per page (default: 5)
+            geography: List of geography filters
+            isic_section: List of ISIC section filters
+            isic_class: List of ISIC class filters
+            activity_type: List of activity type filters
+            sector: List of sector filters
+            
+        Returns:
+            dict: The search results including pagination info and filtered datasets
+        """
+        if not hasattr(self, "version") or not hasattr(self, "system_model"):
+            raise ValueError("Must call set_release() first")
+                
+        # Prepare headers
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "ecoinvent-api-client-library": "ecoinvent_interface",
+            "ecoinvent-api-client-library-version": __version__,
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        headers.update(self.custom_headers)
 
+        # Build search request body
+        request_body = {
+            "filters": {},
+            "query": query or "",
+            "currentPage": current_page,
+            "pageSize": page_size
+        }
+        
+        # Add optional filters
+        if any([geography, isic_section, isic_class, activity_type, sector]):
+            filters = {}
+            if geography:
+                filters["geography"] = geography
+            if isic_section:
+                filters["isic_section"] = isic_section
+            if isic_class:
+                filters["isic_class"] = isic_class
+            if activity_type:
+                filters["activity_type"] = activity_type
+            if sector:
+                filters["sector"] = sector
+            request_body["filters"] = filters
+
+        # Make the request
+        url = f"{self.urls['api']}search/{self.version}/{self.system_model}"
+        
+        response = requests.post(
+            url,
+            headers=headers,
+            json=request_body,
+            timeout=20
+        )
+
+        # Check for errors
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP Error: {str(e)}")
+            logger.error(f"Response content: {response.text}")
+            raise
+
+        try:
+            return response.json()
+        except ValueError as e:
+            logger.error(f"JSON decode error: {str(e)}")
+            logger.error(f"Response content: {response.text}")
+            raise
     def get_file(self, file_type: ProcessFileType, directory: Path) -> Path:
         files = {
             obj.pop("name"): obj
